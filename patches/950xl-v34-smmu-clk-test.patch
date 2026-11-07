@@ -1,0 +1,44 @@
+--- drivers/iommu/arm/arm-smmu/qcom_iommu.c.bak-v34pre	2026-09-26 17:56:55.282968335 +0800
++++ drivers/iommu/arm/arm-smmu/qcom_iommu.c	2026-09-26 17:56:55.283052520 +0800
+@@ -958,6 +958,41 @@
+ 		iounmap(v31m);
+ 	}
+ 
++	/* ==== 墨 2026-09-26 v34: SMMU 总线时钟假设判别（(a) 时钟 vs (b) xPU）====
++	 * 依据：7 个 MMU 窗口全灭、邻居全活；bus clk rate 读到 INT_MAX（红旗）。
++	 * 动作：给 GPU SMMU 的 iface/bus/tbu 强制 clk_set_rate + prepare_enable，
++	 *       并打印前后状态。之后由 +50s 的异步读(0xfdb10000)判定：
++	 *         能读 => (a) 时钟成立；仍 abort => 强指向 (b) xPU/TZ。
++	 * 安全：只碰 clk 框架，无危险读。
++	 */
++	{
++		struct clk *v34_if = q->clks[CLK_IFACE].clk;
++		struct clk *v34_bs = q->clks[CLK_BUS].clk;
++		struct clk *v34_tb = q->clks[CLK_TBU].clk;
++		int v34r;
++
++		mo_probe("[v34] SMMU clk BEFORE: iface en=%d rate=%ld | bus en=%d rate=%ld | tbu en=%d rate=%ld\n",
++			 __clk_is_enabled(v34_if), clk_get_rate(v34_if),
++			 __clk_is_enabled(v34_bs), clk_get_rate(v34_bs),
++			 __clk_is_enabled(v34_tb), clk_get_rate(v34_tb));
++
++		v34r = clk_set_rate(v34_bs, 200000000);
++		mo_probe("[v34] set_rate(bus,200M)   -> %d rate=%ld\n", v34r, clk_get_rate(v34_bs));
++		v34r = clk_set_rate(v34_if, 80000000);
++		mo_probe("[v34] set_rate(iface,80M)  -> %d rate=%ld\n", v34r, clk_get_rate(v34_if));
++
++		v34r = clk_prepare_enable(v34_if);
++		mo_probe("[v34] enable(iface) -> %d en=%d\n", v34r, __clk_is_enabled(v34_if));
++		v34r = clk_prepare_enable(v34_bs);
++		mo_probe("[v34] enable(bus)   -> %d en=%d\n", v34r, __clk_is_enabled(v34_bs));
++		v34r = clk_prepare_enable(v34_tb);
++		mo_probe("[v34] enable(tbu)   -> %d en=%d\n", v34r, __clk_is_enabled(v34_tb));
++
++		mo_probe("[v34] SMMU clk AFTER : iface rate=%ld | bus rate=%ld | tbu rate=%ld\n",
++			 clk_get_rate(v34_if), clk_get_rate(v34_bs), clk_get_rate(v34_tb));
++		mo_probe("[v34] => 现在等 +50s 异步读 0xfdb10000，能读=(a)成立\n");
++	}
++
+ 	/* v31b: 可读 fabric 的 QoS 探底（只读），为后续 QoS 直写找落点
+ 	 * snoc=0xFC460000(base-off 0x5000,qos-off 0x80) / cnoc=0xFC480000
+ 	 * bimc=0xFC380000(base-off 0,qos-off 0x80,mas_apps_proc qport 0)

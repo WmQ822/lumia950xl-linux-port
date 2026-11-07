@@ -1,0 +1,87 @@
+/*
+ * MSM8994 (Lumia 950 XL / snapdragon 810) — GPU IOMMU (gpu_iommu) DT 草稿
+ * -----------------------------------------------------------------------
+ * 目标：把下游的 kgsl_iommu (qcom,msm-smmu-v1) 移植成主线 qcom,msm-iommu-v1，
+ *       让 adreno(a430) 的 iommus 指针能指过来。
+ *
+ * 已核对（在 CachyOS 的 ~/lumia-kernel 里）：
+ *   - 主线驱动支持：drivers/iommu/arm/arm-smmu/qcom_iommu.c
+ *       { .compatible = "qcom,msm-iommu-v1" }        (第900行)
+ *       { "qcom,msm-iommu-v1-ns" } / { "qcom,msm-iommu-v1-sec" }  (ctx)
+ *   - asid 算法：get_asid() = ctx节点的 reg / 0x1000（相对 ranges 基址），且 "asid 与 ctx bank 号 1:1"
+ *   - 模板：msm8916.dtsi 的 gpu_iommu (iommu@1f08000)  ← 结构照抄
+ *
+ * 8994 数据（下游 angler_msm-iommu-v1.dtsi + angler_msm8994-iommu.dtsi）：
+ *   iommu base = 0xfdb10000, size 0x10000, global(pmon) irq = 38
+ *   ctx: fdb18000 = gfx3d_user (SID0/1)   -> 相对偏移 0x8000
+ *        fdb19000 = gfx3d_priv            -> 相对偏移 0x9000
+ *        fdb1a000 = secure (SID2)         -> 相对偏移 0xa000
+ *   secure-id = 18；vdd = gdsc_oxili_cx，alt = gdsc_oxili_gx
+ *   clk = clk_oxili_gfx3d_clk + clk_oxilicx_ahb_clk
+ *
+ * 主线 mmcc-msm8994.h 里可用宏：
+ *   OXILI_GFX3D_CLK(115) · OXILICX_AHB_CLK(117) · OXILI_RBBMTIMER_CLK(116)
+ *   OXILI_GX_GDSC(9) · OXILI_CX_GDSC(10)
+ * -----------------------------------------------------------------------
+ */
+
+/* ===== 1) 新增节点：放进 msm8994.dtsi 的 soc { } 内，gpu 节点附近 ===== */
+gpu_iommu: iommu@fdb10000 {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	#iommu-cells = <1>;
+	compatible = "qcom,msm-iommu-v1";	/* 主线只有这个 generic 串，无 8994 专用串 */
+	ranges = <0 0xfdb10000 0x10000>;
+	/* TODO 待核：msm8916 的 gpu_iommu 只有 ranges、没写 reg；
+	 * 8994 需不需要 reg=<0xfdb10000 0x10000> 给出全局配置 bank，编译时验证 */
+	reg = <0xfdb10000 0x10000>;
+
+	clocks = <&mmcc OXILICX_AHB_CLK>,	/* iface */
+		 <&mmcc OXILI_GFX3D_CLK>;	/* bus（对齐下游：gfx3d + oxilicx_ahb） */
+	clock-names = "iface", "bus";
+
+	power-domains = <&mmcc OXILI_CX_GDSC>;	/* 下游 vdd=gdsc_oxili_cx；alt=gdsc_oxili_gx 主线暂无 alt 字段 */
+
+	qcom,iommu-secure-id = <18>;
+
+	/* gfx3d_user：偏移 0x8000 → asid 8 */
+	iommu-ctx@8000 {
+		compatible = "qcom,msm-iommu-v1-ns";
+		reg = <0x8000 0x1000>;
+		interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	/* gfx3d_priv：偏移 0x9000 → asid 9 */
+	iommu-ctx@9000 {
+		compatible = "qcom,msm-iommu-v1-ns";
+		reg = <0x9000 0x1000>;
+		interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	/* gfx3d secure：偏移 0xa000 → asid 10（下游 SID2 + secure-context） */
+	iommu-ctx@a000 {
+		compatible = "qcom,msm-iommu-v1-sec";
+		reg = <0xa000 0x1000>;
+		interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH>;
+	};
+};
+
+/* ===== 2) 给 gpu 节点补 iommus（msm8994.dtsi 里 gpu@fdb00000） ===== */
+/*
+	gpu: gpu@fdb00000 {
+		...
+		iommus = <&gpu_iommu 8>, <&gpu_iommu 9>;   // user + priv（asid）
+	};
+*/
+
+/* -----------------------------------------------------------------------
+ * 待核对 / 风险点（逐条验证后再上机）
+ * 1) global(pmon) irq 38：**主线用不到**（主线用 ctx 中断，msm8916 gpu_iommu 无顶层 interrupts）
+ *    → 昨晚"缺 global irq"的结论，是"下游节点"才需要；主线 DT 里省略。
+ * 2) asid 取值：主线 get_asid = reg/0x1000（ctx 相对偏移）。8994 bank 偏移 0x8000/0x9000/0xa000
+ *    → asid = 8/9/10。若实测 probe 报 asid 越界，再核对 ranges/reg 是否为"相对值"。
+ * 3) clock-names：主线要求 "iface"（必需）+ "bus"（可选）。哪个是哪个需实测/对比下游。
+ * 4) reg：msm8916 gpu_iommu 省略了 reg；此处先写上，编译/探测两边都试。
+ * 5) secure ctx：msm8916 gpu 只有 2 个 ns ctx；8994 多一个 secure，保留。
+ * 6) 上电顺序：iommu 依赖 mmcc pd/clk，确保与 gpu/mdss 的 GDSC 依赖一致。
+ * ----------------------------------------------------------------------- */

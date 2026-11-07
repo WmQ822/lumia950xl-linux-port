@@ -1,0 +1,37 @@
+# 950XL qcom_iommu 延迟探测 补丁（方案 A）
+# 目标文件：drivers/iommu/arm/arm-smmu/qcom_iommu.c
+# 函数：qcom_iommu_device_probe()
+#
+# 背景（2026-09-23 实测）：
+#   - iommu 是内置(=y)，约 10s 就 probe；但 8994 的 GPU IOMMU 在 MMSS 的 GX/CX 域
+#   - 此时 RPM 稳压器还在 defer（日志：pm8994-regulators devm_regulator_register ret=-517）
+#     → GX 电源没起来 → oxili_gfx3d_clk halt 位不动 → clk_branch_wait WARN + -EBUSY
+#   - probe 没把错误上报 → 子设备(ctx)照样 probe → 访问 0xfdb18000 → synchronous external abort → oops
+#
+# 改法：probe 开头主动 get_sync 一次，若失败就 -EPROBE_DEFER（稍后电源就绪自动重试）
+#
+# 定位锚点（在 pm_runtime_enable(dev); 之后插入）：
+#
+# 		platform_set_drvdata(pdev, qcom_iommu);
+#
+# 		pm_runtime_enable(dev);
+#  +++ 从这里开始插入 +++
+# 		/* 墨: iommu 依赖 MMSS(GX/CX) 电源/时钟，早期可能还没就绪 -> defer 重试 */
+# 		ret = pm_runtime_get_sync(dev);
+# 		if (ret < 0) {
+# 			pm_runtime_put_noidle(dev);
+# 			pm_runtime_disable(dev);
+# 			dev_info(dev, "%s: iommu not ready yet (%d), deferring\n",
+# 				 __func__, ret);
+# 			return -EPROBE_DEFER;
+# 		}
+# 		pm_runtime_put_sync(dev);
+#
+# 		/* register context bank devices, which are child nodes: */
+# 		ret = devm_of_platform_populate(dev);
+#
+# （可选，更保险）若想连 -EBUSY 也当 defer：
+#   if (ret == -EBUSY) ret = -EPROBE_DEFER;  -- 但 get_sync 已经把 resume 错误带出来了
+#
+# 编译：make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image
+# 部署：把 arch/arm64/boot/Image 覆盖手机 /boot/vmlinuz-5.18.0-rc1（先备份）

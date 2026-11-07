@@ -1,0 +1,19 @@
+--- drivers/iommu/arm/arm-smmu/qcom_iommu.c.bak-v33pre	2026-09-26 17:43:06.281747893 +0800
++++ drivers/iommu/arm/arm-smmu/qcom_iommu.c	2026-09-26 17:43:06.281835396 +0800
+@@ -831,6 +831,16 @@
+ 	{ 0xfc47b080, 76000 }, /* mnoc+0x3080 */
+ 	{ 0xfc47b100, 80000 }, /* mnoc+0x3100 */
+ 	{ 0xfc47b180, 84000 }, /* mnoc+0x3180 */
++	/* ==== 墨 2026-09-26 v33: 判别实验（防火墙 vs 无时钟）====
++	 * 补全 MMU5/MMU6（ACPI 有），MMU3 分段(global/ns-ctx/sec-ctx)，
++	 * 加 alive 对照(GPU 第二窗口)与"空洞"对照。 */
++	{ 0xfd864000, 88000 },  /* MMU6 */
++	{ 0xfda84000, 92000 },  /* MMU5 */
++	{ 0xfdb12000, 96000 },  /* MMU3 +0x2000 (global cfg 尾部) */
++	{ 0xfdb18000, 100000 }, /* MMU3 ctx@8000 (ns) */
++	{ 0xfdb1a000, 104000 }, /* MMU3 ctx@a000 (sec) */
++	{ 0xfd828000, 108000 }, /* GPU0 _CRS 第二窗口(alive 对照) */
++	{ 0xfdf00000, 112000 }  /* 未实现空洞对照(预期 abort) */
+ };
+ static int mo_rd_thread(void *arg)
+ {

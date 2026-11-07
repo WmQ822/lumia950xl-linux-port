@@ -1,0 +1,39 @@
+// 950XL Samsung 1440x2560 AMOLED panel (从 PLAT 分区挖到的原厂配置)
+// 数据来源: /dev/sda34 (PLAT) -> dsiPanel XML
+&dsi0 {
+	status = "okay";
+
+	panel@0 {
+		compatible = "samsung,wqhd-amoled-950xl";  // 实际兼容名待定
+		reg = <0>;
+
+		/* 从 PLAT 分区挖到的时序 */
+		backlight = <&pmi8994_wled>;
+		reset-gpios = <&tlmm 64 GPIO_ACTIVE_LOW>;  // 实际 GPIO 待确定
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi0_out>;
+			};
+		};
+	};
+};
+
+/* dsi0 需要加 output port 指向 panel，用单向 graph 避免循环依赖 */
+&dsi0 {
+	ports {
+		port@0 {
+			reg = <0>;
+			dsi0_out: endpoint {
+				remote-endpoint = <&panel_in>;
+				data-lanes = <0 1 2 3>;
+			};
+		};
+		port@1 {
+			reg = <1>;
+			dsi0_in: endpoint {
+				remote-endpoint = <&mdp5_intf1_out>;
+			};
+		};
+	};
+};

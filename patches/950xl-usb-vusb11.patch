@@ -1,0 +1,58 @@
+--- /home/wmq/lumia-kernel/arch/arm64/boot/dts/qcom/msm8994.dtsi.bak-usb-vusb11	2026-09-27 16:47:56.387100985 +0800
++++ /home/wmq/lumia-kernel/arch/arm64/boot/dts/qcom/msm8994.dtsi	2026-09-27 16:47:56.414981247 +0800
+@@ -666,25 +666,33 @@
+ 			vdda18-supply = <&usb_phy_vdd>;
+ 			vdda33-supply = <&usb_phy_vdd>;
+ 			resets = <&gcc QUSB2_PHY_RESET>;
+-			status = "okay";
++			status = "disabled";
+ 		};
+ 
+-		usb3: usb@f9288000 {
+-			compatible = "qcom,msm8996-dwc3", "qcom,dwc3";
+-			reg = <0xf9288000 0x400>;
++		usb3: usb@f92f8800 {
++			compatible = "qcom,msm8994-dwc3", "qcom,dwc3";
++			reg = <0xf92f8800 0x400>;
+ 			#address-cells = <1>;
+ 			#size-cells = <1>;
+ 			ranges;
+ 
+-			interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
+-				     <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>;
+-			interrupt-names = "hs_phy_irq", "pwr_event_irq";
++			interrupts = <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 311 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 310 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "pwr_event",
++					  "qusb2_phy",
++					  "hs_phy_irq",
++					  "ss_phy_irq";
+ 
+ 			clocks = <&gcc GCC_USB30_MASTER_CLK>,
+ 				 <&gcc GCC_SYS_NOC_USB3_AXI_CLK>,
+ 				 <&gcc GCC_USB30_SLEEP_CLK>,
+ 				 <&gcc GCC_USB30_MOCK_UTMI_CLK>;
+-			clock-names = "core", "iface", "sleep", "mock_utmi", "ref", "xo";
++			clock-names = "core",
++					      "iface",
++					      "sleep",
++					      "mock_utmi";
+ 
+ 			assigned-clocks = <&gcc GCC_USB30_MOCK_UTMI_CLK>,
+ 					  <&gcc GCC_USB30_MASTER_CLK>;
+@@ -694,12 +702,9 @@
+ 			qcom,select-utmi-as-pipe-clk;
+ 
+ 			usb@f9200000 {
+-				/* 墨 2026-09-26: 挂 HS PHY + 放开 OTG（host/gadget 双模）*/
+-				phys = <&usb_hs_phy>;
+-				phy-names = "usb2-phy";
+ 				compatible = "snps,dwc3";
+ 				reg = <0xf9200000 0xcc00>;
+-				interrupts = <0 131 IRQ_TYPE_LEVEL_HIGH>;
++				interrupts = <GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>;
+ 				snps,dis_u2_susphy_quirk;
+ 				snps,dis_enblslpm_quirk;
+ 				maximum-speed = "high-speed";

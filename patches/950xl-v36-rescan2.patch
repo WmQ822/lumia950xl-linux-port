@@ -1,0 +1,41 @@
+--- drivers/iommu/arm/arm-smmu/qcom_iommu.c.bak-v36pre	2026-09-26 19:51:53.010744330 +0800
++++ drivers/iommu/arm/arm-smmu/qcom_iommu.c	2026-09-26 19:52:26.271806912 +0800
+@@ -840,7 +840,15 @@
+ 	{ 0xfdb18000, 100000 }, /* MMU3 ctx@8000 (ns) */
+ 	{ 0xfdb1a000, 104000 }, /* MMU3 ctx@a000 (sec) */
+ 	{ 0xfd828000, 108000 }, /* GPU0 _CRS 第二窗口(alive 对照) */
+-	{ 0xfdf00000, 112000 }  /* 未实现空洞对照(预期 abort) */
++	{ 0xfdf00000, 112000 },
++	/* ==== v36: 补全扫描（异步，每地址独立线程，安全）==== */
++	{ 0xfc47b200, 116000 }, { 0xfc47b280, 120000 }, { 0xfc47b300, 124000 },
++	{ 0xfc47b380, 128000 }, { 0xfc47b400, 132000 }, { 0xfc47b480, 136000 },
++	{ 0xfc465000, 140000 }, { 0xfc465100, 144000 }, { 0xfc465200, 148000 },
++	{ 0xfc465300, 152000 }, { 0xfc465400, 156000 }, { 0xfc465500, 160000 },
++	{ 0xfc465600, 164000 }, { 0xfc465700, 168000 },
++	{ 0xfd4a8000, 172000 }, { 0xfd4a0000, 176000 }, { 0xfd484000, 180000 },
++	{ 0xfd512028, 184000 }, { 0xfc4b8000, 188000 }, { 0xfc4b9000, 192000 }  /* 未实现空洞对照(预期 abort) */
+ };
+ static int mo_rd_thread(void *arg)
+ {
+@@ -1037,6 +1045,21 @@
+ 		}
+ 	}
+ 
++
++	/* ==== 墨 2026-09-26 v36: TZ/SCM 能力探查（只查询，无副作用）==== */
++	{
++		size_t v36sz = 0;
++		int v36r;
++
++		mo_probe("[v36] scm_available=%d restore_sec_cfg_available=%d\n",
++			 qcom_scm_is_available(), qcom_scm_restore_sec_cfg_available());
++		v36r = qcom_scm_iommu_secure_ptbl_size(0, &v36sz);
++		mo_probe("[v36] iommu_secure_ptbl_size(spare=0)  -> %d size=%zu\n", v36r, v36sz);
++		v36sz = 0;
++		v36r = qcom_scm_iommu_secure_ptbl_size(18, &v36sz);
++		mo_probe("[v36] iommu_secure_ptbl_size(spare=18) -> %d size=%zu\n", v36r, v36sz);
++	}
++
+ 	/* v31b: 可读 fabric 的 QoS 探底（只读），为后续 QoS 直写找落点
+ 	 * snoc=0xFC460000(base-off 0x5000,qos-off 0x80) / cnoc=0xFC480000
+ 	 * bimc=0xFC380000(base-off 0,qos-off 0x80,mas_apps_proc qport 0)

@@ -1,0 +1,53 @@
+--- drivers/iommu/arm/arm-smmu/qcom_iommu.c.bak-v35pre	2026-09-26 18:26:44.463038973 +0800
++++ drivers/iommu/arm/arm-smmu/qcom_iommu.c	2026-09-26 18:26:44.463125026 +0800
+@@ -993,6 +993,50 @@
+ 		mo_probe("[v34] => 现在等 +50s 异步读 0xfdb10000，能读=(a)成立\n");
+ 	}
+ 
++	/* ==== 墨 2026-09-26 v35: NoC 配置空间密集扫描（找 xPU/QoS 配置）====
++	 * 依据：UEFI 的 xPU 模块把 snoc(0xFC460000)/mnoc(0xFC478000) 等列为其关心的地址；
++	 *       PEP 里 xPU_CFG/SMMU_CFG 是 NoC 从端口；mnoc/snoc 寄存器块可读。
++	 * 只读扫描，安全（无危险地址）。
++	 */
++	{
++		void __iomem *v35;
++		int v35i;
++
++		mo_probe("[v35] ==== NoC cfg scan  MNOC @0xFC47B000 ====\n");
++		v35 = ioremap(0xfc47b000, 0x1000);
++		for (v35i = 0; v35i < 0x800; v35i += 0x20)
++			mo_probe("[v35] MNOC +0x%04x = %08x %08x %08x %08x\n", v35i,
++				 readl_relaxed(v35 + v35i), readl_relaxed(v35 + v35i + 4),
++				 readl_relaxed(v35 + v35i + 8), readl_relaxed(v35 + v35i + 0xc));
++		iounmap(v35);
++
++		mo_probe("[v35] ==== NoC cfg scan  SNOC @0xFC465000 ====\n");
++		v35 = ioremap(0xfc465000, 0x1000);
++		for (v35i = 0; v35i < 0x800; v35i += 0x20)
++			mo_probe("[v35] SNOC +0x%04x = %08x %08x %08x %08x\n", v35i,
++				 readl_relaxed(v35 + v35i), readl_relaxed(v35 + v35i + 4),
++				 readl_relaxed(v35 + v35i + 8), readl_relaxed(v35 + v35i + 0xc));
++		iounmap(v35);
++
++		/* 平台/版本/安全寄存器（uefiplat.cfg 声明为 NS_DEVICE）*/
++		{
++			void __iomem *v35b = ioremap(0xfd4a0000, 0x1000);
++			mo_probe("[v35] SOC_HW_VERSION 0xFD4A8000 = 0x%08x\n", readl_relaxed(v35b + 0x8000 - 0x8000));
++			iounmap(v35b);
++			v35 = ioremap(0xfd4a8000, 0x1000);
++			mo_probe("[v35] 0xFD4A8000 = 0x%08x\n", readl_relaxed(v35));
++			mo_probe("[v35] 0xFD512028(TLMM/ver) -> ");
++			iounmap(v35);
++			v35 = ioremap(0xfd510000, 0x3000);
++			mo_probe("0x%08x\n", readl_relaxed(v35 + 0x2028));
++			iounmap(v35);
++			v35 = ioremap(0xfd4a0000, 0x1000);
++			mo_probe("[v35] TCSR 0xFD4A0000+0x0/0x4/0x8 = %08x %08x %08x\n",
++				 readl_relaxed(v35), readl_relaxed(v35+4), readl_relaxed(v35+8));
++			iounmap(v35);
++		}
++	}
++
+ 	/* v31b: 可读 fabric 的 QoS 探底（只读），为后续 QoS 直写找落点
+ 	 * snoc=0xFC460000(base-off 0x5000,qos-off 0x80) / cnoc=0xFC480000
+ 	 * bimc=0xFC380000(base-off 0,qos-off 0x80,mas_apps_proc qport 0)

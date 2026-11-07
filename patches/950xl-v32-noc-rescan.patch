@@ -1,0 +1,237 @@
+--- drivers/iommu/arm/arm-smmu/qcom_iommu.c.bak-v32pre	2026-09-26 17:21:29.665616944 +0800
++++ drivers/iommu/arm/arm-smmu/qcom_iommu.c	2026-09-26 17:21:29.665707496 +0800
+@@ -827,6 +827,10 @@
+ 	{ 0xfdc84000, 56000 }, /* MMU4(venus) */
+ 	{ 0xfc478000, 62000 }, /* MMSS NoC(mnoc) */
+ 	{ 0xfc47b000, 68000 }, /* mnoc fabric base(+0x3000) */
++	{ 0xfc47b040, 72000 }, /* mnoc+0x3040 */
++	{ 0xfc47b080, 76000 }, /* mnoc+0x3080 */
++	{ 0xfc47b100, 80000 }, /* mnoc+0x3100 */
++	{ 0xfc47b180, 84000 }, /* mnoc+0x3180 */
+ };
+ static int mo_rd_thread(void *arg)
+ {
+@@ -877,6 +881,99 @@
+ 
+ 
+ 
++	/* ==== 墨 2026-09-26 v31: MMSS NoC 时钟链诊断 + 强制点亮（"唤醒 NoC"首选实验）
++	 * 依据：v30 明暗地图显示 mnoc(0xFC478000) 及全部 IOMMU 皆暗、MDSS/GPU 亮。
++	 *   本机内核**没有任何 msm_bus/ICB 驱动**（drivers/interconnect/qcom 只有通用
++	 *   icc-rpm，无 8994 fabric 驱动）-> 没人给 NoC 编 QoS，也没有人给 MMSS NoC
++	 *   的 AXI 时钟投票。fab_mnoc 的 bus_clk = mmss_s0_axi_clk(MMCC 0x5064) /
++	 *   mmss_mmssnoc_axi_clk(0x506c)，父 = axi_clk_src(CMD_RCGR 0x5040)。
++	 *   怀疑：分支 BIT(0) 使能了但 BIT(31) RUN=0（源头 PLL/RCG 没转）-> 无时钟 -> abort。
++	 * 动作：①MMCC 时钟链全量 dump ②强制点亮根+三分支 ③兜底把 src 切到 gpll0
++	 * 安全：MMCC 块是活的；只读 + 只写使能位；无危险读（危险读仍在最后 v7 段）
++	 */
++	{
++		void __iomem *v31m = ioremap(0xfd8c0000, 0x8000);
++		static const unsigned int v31d[] = {
++			0x0000, 0x0004, 0x0008, 0x000c, 0x0010, 0x0014, 0x0018, 0x001c, 0x0020, /* mmpll0 */
++			0x0030, 0x0034, 0x0038, 0x003c, 0x0040, 0x0044, 0x0048, 0x004c, 0x0050, /* mmpll1 */
++			0x0060, 0x0064, 0x0068, 0x006c, /* mmpll3 */
++			0x0090, 0x0094, 0x0098, 0x009c, /* mmpll4 */
++			0x0100, 0x0104, /* early pll en */
++			0x502c, 0x5040, 0x5044, 0x5048, 0x504c, 0x5050,
++			0x5060, 0x5064, 0x5068, 0x506c, 0x5070, 0x5074, 0x5078, 0x507c, 0x5080
++		};
++		int v31i;
++
++		mo_probe("[v31] ==== MMCC clk-chain dump (0xfd8c0000) ====\n");
++		for (v31i = 0; v31i < (int)(sizeof(v31d) / sizeof(v31d[0])); v31i++)
++			mo_probe("[v31] +0x%04x = 0x%08x\n", v31d[v31i], readl_relaxed(v31m + v31d[v31i]));
++
++		{
++			static const unsigned int v31e[] = { 0x5040, 0x5064, 0x506c, 0x502c };
++			const char *v31n[] = { "axi_clk_src(rcgr)", "mmss_s0_axi",
++					       "mmss_mmssnoc_axi", "mmss_misc_ahb" };
++			int v31k;
++
++			for (v31k = 0; v31k < 4; v31k++) {
++				u32 v31b = readl_relaxed(v31m + v31e[v31k]);
++				u32 v31a;
++
++				mo_probe("[v31] %s +0x%04x before=0x%08x\n", v31n[v31k], v31e[v31k], v31b);
++				writel_relaxed(v31b | BIT(0), v31m + v31e[v31k]);
++				udelay(20);
++				v31a = readl_relaxed(v31m + v31e[v31k]);
++				mo_probe("[v31] %s after =0x%08x en=%d run=%d\n", v31n[v31k], v31a,
++					 !!(v31a & BIT(0)), !!(v31a & BIT(31)));
++			}
++
++			/* 兜底：s0_axi 使能了但没在跑 -> 把 axi_clk_src 父切到 gpll0(sel=5) */
++			{
++				u32 v31cfg = readl_relaxed(v31m + 0x5044);
++				u32 v31s0 = readl_relaxed(v31m + 0x5064);
++
++				if ((v31s0 & BIT(0)) && !(v31s0 & BIT(31))) {
++					u32 v31nv = (v31cfg & ~(0x7u << 8)) | (5u << 8);
++
++					mo_probe("[v31] fallback: axi src_sel %u -> gpll0(5)\n",
++						 (v31cfg >> 8) & 0x7);
++					writel_relaxed(v31nv, v31m + 0x5044);
++					udelay(50);
++					mo_probe("[v31] cfg 0x5044=0x%08x  s0_axi=0x%08x run=%d\n",
++						 readl_relaxed(v31m + 0x5044),
++						 readl_relaxed(v31m + 0x5064),
++						 !!(readl_relaxed(v31m + 0x5064) & BIT(31)));
++				}
++			}
++		}
++		iounmap(v31m);
++	}
++
++	/* v31b: 可读 fabric 的 QoS 探底（只读），为后续 QoS 直写找落点
++	 * snoc=0xFC460000(base-off 0x5000,qos-off 0x80) / cnoc=0xFC480000
++	 * bimc=0xFC380000(base-off 0,qos-off 0x80,mas_apps_proc qport 0)
++	 */
++	{
++		void __iomem *v31q;
++		static const unsigned int v31s[] = { 0x5000, 0x5080, 0x5100, 0x5180 };
++		int v31i;
++
++		v31q = ioremap(0xfc460000, 0x6000); /* SNOC */
++		for (v31i = 0; v31i < (int)(sizeof(v31s) / sizeof(v31s[0])); v31i++)
++			mo_probe("[v31] SNOC +0x%04x = 0x%08x\n", v31s[v31i], readl_relaxed(v31q + v31s[v31i]));
++		iounmap(v31q);
++
++		v31q = ioremap(0xfc480000, 0x88); /* CNOC */
++		mo_probe("[v31] CNOC +0x00=0x%08x +0x04=0x%08x +0x80=0x%08x\n",
++			 readl_relaxed(v31q + 0x0), readl_relaxed(v31q + 0x4), readl_relaxed(v31q + 0x80));
++		iounmap(v31q);
++
++		v31q = ioremap(0xfc380000, 0x1000); /* BIMC */
++		mo_probe("[v31] BIMC +0x00=0x%08x +0x04=0x%08x +0x80=0x%08x +0x100=0x%08x\n",
++			 readl_relaxed(v31q + 0x0), readl_relaxed(v31q + 0x4),
++			 readl_relaxed(v31q + 0x80), readl_relaxed(v31q + 0x100));
++		iounmap(v31q);
++	}
++
+ 	mo_probe("[late] iface clk: en=%d rate=%ld\n",
+ 		 __clk_is_enabled(q->clks[CLK_IFACE].clk),
+ 		 clk_get_rate(q->clks[CLK_IFACE].clk));
+@@ -985,23 +1082,6 @@
+ 		iounmap(mo_b);
+ 	}
+ 
+-	/* v27: MMSS NoC (mnoc @0xFC478000) 存活/结构扫描 —— GFX3D_CFG(slv-oxili-cfg)
+-	 * 挂在 fab_mnoc 上，经 CNOC 的 mmss_cfg master 到达。看看 mnoc 能不能读、
+-	 * 以及有没有 xPU/QoS 相关寄存器（NoC 里确实有 slv_*_xpu_cfg 这类端口）。
+-	 */
+-	{
+-		static const unsigned int mo_off[] = { 0x0, 0x4, 0x8, 0xc, 0x10,
+-						      0x20, 0x40, 0x80, 0x100, 0x1000, 0x2000, 0x3000 };
+-		void __iomem *mo_n = ioremap(0xfc478000, 0x4000);
+-		int mo_i;
+-
+-		mo_probe("[v27] mnoc @%px\n", mo_n);
+-		for (mo_i = 0; mo_i < (int)(sizeof(mo_off)/sizeof(mo_off[0])); mo_i++)
+-			mo_probe("[v27] mnoc+0x%04x = 0x%08x\n", mo_off[mo_i],
+-				 readl_relaxed(mo_n + mo_off[mo_i]));
+-		iounmap(mo_n);
+-	}
+-
+ 	/* ==== 墨 2026-09-25: BFB —— 照下游 kgsl_iommu 的 qcom,iommu-bfb-regs/data 写 SMMU 全局块
+ 	 * CAF smmu-v1 的 __program_bfb() 做的就是这件事，疑似"放行非安全访问"那一步。
+ 	 * 注意：只写、不回读（读 0xfdb1xxxx 会硬复位，v23 教训）。写是 posted，
+@@ -1030,99 +1110,6 @@
+ 		}
+ 	}
+ 
+-	/* ==== 墨 2026-09-26 v31: MMSS NoC 时钟链诊断 + 强制点亮（"唤醒 NoC"首选实验）
+-	 * 依据：v30 明暗地图显示 mnoc(0xFC478000) 及全部 IOMMU 皆暗、MDSS/GPU 亮。
+-	 *   本机内核**没有任何 msm_bus/ICB 驱动**（drivers/interconnect/qcom 只有通用
+-	 *   icc-rpm，无 8994 fabric 驱动）-> 没人给 NoC 编 QoS，也没有人给 MMSS NoC
+-	 *   的 AXI 时钟投票。fab_mnoc 的 bus_clk = mmss_s0_axi_clk(MMCC 0x5064) /
+-	 *   mmss_mmssnoc_axi_clk(0x506c)，父 = axi_clk_src(CMD_RCGR 0x5040)。
+-	 *   怀疑：分支 BIT(0) 使能了但 BIT(31) RUN=0（源头 PLL/RCG 没转）-> 无时钟 -> abort。
+-	 * 动作：①MMCC 时钟链全量 dump ②强制点亮根+三分支 ③兜底把 src 切到 gpll0
+-	 * 安全：MMCC 块是活的；只读 + 只写使能位；无危险读（危险读仍在最后 v7 段）
+-	 */
+-	{
+-		void __iomem *v31m = ioremap(0xfd8c0000, 0x8000);
+-		static const unsigned int v31d[] = {
+-			0x0000, 0x0004, 0x0008, 0x000c, 0x0010, 0x0014, 0x0018, 0x001c, 0x0020, /* mmpll0 */
+-			0x0030, 0x0034, 0x0038, 0x003c, 0x0040, 0x0044, 0x0048, 0x004c, 0x0050, /* mmpll1 */
+-			0x0060, 0x0064, 0x0068, 0x006c, /* mmpll3 */
+-			0x0090, 0x0094, 0x0098, 0x009c, /* mmpll4 */
+-			0x0100, 0x0104, /* early pll en */
+-			0x502c, 0x5040, 0x5044, 0x5048, 0x504c, 0x5050,
+-			0x5060, 0x5064, 0x5068, 0x506c, 0x5070, 0x5074, 0x5078, 0x507c, 0x5080
+-		};
+-		int v31i;
+-
+-		mo_probe("[v31] ==== MMCC clk-chain dump (0xfd8c0000) ====\n");
+-		for (v31i = 0; v31i < (int)(sizeof(v31d) / sizeof(v31d[0])); v31i++)
+-			mo_probe("[v31] +0x%04x = 0x%08x\n", v31d[v31i], readl_relaxed(v31m + v31d[v31i]));
+-
+-		{
+-			static const unsigned int v31e[] = { 0x5040, 0x5064, 0x506c, 0x502c };
+-			const char *v31n[] = { "axi_clk_src(rcgr)", "mmss_s0_axi",
+-					       "mmss_mmssnoc_axi", "mmss_misc_ahb" };
+-			int v31k;
+-
+-			for (v31k = 0; v31k < 4; v31k++) {
+-				u32 v31b = readl_relaxed(v31m + v31e[v31k]);
+-				u32 v31a;
+-
+-				mo_probe("[v31] %s +0x%04x before=0x%08x\n", v31n[v31k], v31e[v31k], v31b);
+-				writel_relaxed(v31b | BIT(0), v31m + v31e[v31k]);
+-				udelay(20);
+-				v31a = readl_relaxed(v31m + v31e[v31k]);
+-				mo_probe("[v31] %s after =0x%08x en=%d run=%d\n", v31n[v31k], v31a,
+-					 !!(v31a & BIT(0)), !!(v31a & BIT(31)));
+-			}
+-
+-			/* 兜底：s0_axi 使能了但没在跑 -> 把 axi_clk_src 父切到 gpll0(sel=5) */
+-			{
+-				u32 v31cfg = readl_relaxed(v31m + 0x5044);
+-				u32 v31s0 = readl_relaxed(v31m + 0x5064);
+-
+-				if ((v31s0 & BIT(0)) && !(v31s0 & BIT(31))) {
+-					u32 v31nv = (v31cfg & ~(0x7u << 8)) | (5u << 8);
+-
+-					mo_probe("[v31] fallback: axi src_sel %u -> gpll0(5)\n",
+-						 (v31cfg >> 8) & 0x7);
+-					writel_relaxed(v31nv, v31m + 0x5044);
+-					udelay(50);
+-					mo_probe("[v31] cfg 0x5044=0x%08x  s0_axi=0x%08x run=%d\n",
+-						 readl_relaxed(v31m + 0x5044),
+-						 readl_relaxed(v31m + 0x5064),
+-						 !!(readl_relaxed(v31m + 0x5064) & BIT(31)));
+-				}
+-			}
+-		}
+-		iounmap(v31m);
+-	}
+-
+-	/* v31b: 可读 fabric 的 QoS 探底（只读），为后续 QoS 直写找落点
+-	 * snoc=0xFC460000(base-off 0x5000,qos-off 0x80) / cnoc=0xFC480000
+-	 * bimc=0xFC380000(base-off 0,qos-off 0x80,mas_apps_proc qport 0)
+-	 */
+-	{
+-		void __iomem *v31q;
+-		static const unsigned int v31s[] = { 0x5000, 0x5080, 0x5100, 0x5180 };
+-		int v31i;
+-
+-		v31q = ioremap(0xfc460000, 0x6000); /* SNOC */
+-		for (v31i = 0; v31i < (int)(sizeof(v31s) / sizeof(v31s[0])); v31i++)
+-			mo_probe("[v31] SNOC +0x%04x = 0x%08x\n", v31s[v31i], readl_relaxed(v31q + v31s[v31i]));
+-		iounmap(v31q);
+-
+-		v31q = ioremap(0xfc480000, 0x88); /* CNOC */
+-		mo_probe("[v31] CNOC +0x00=0x%08x +0x04=0x%08x +0x80=0x%08x\n",
+-			 readl_relaxed(v31q + 0x0), readl_relaxed(v31q + 0x4), readl_relaxed(v31q + 0x80));
+-		iounmap(v31q);
+-
+-		v31q = ioremap(0xfc380000, 0x1000); /* BIMC */
+-		mo_probe("[v31] BIMC +0x00=0x%08x +0x04=0x%08x +0x80=0x%08x +0x100=0x%08x\n",
+-			 readl_relaxed(v31q + 0x0), readl_relaxed(v31q + 0x4),
+-			 readl_relaxed(v31q + 0x80), readl_relaxed(v31q + 0x100));
+-		iounmap(v31q);
+-	}
+-
+ 	/* v7: 地址可达性扫描。每个地址"先打印再读"，中了就硬复位但能定位边界 */
+ 	{
+ 		/* v25: 把 fdb10000 加回来 —— 关键实验：bfb 写完之后它是否变"可读"
